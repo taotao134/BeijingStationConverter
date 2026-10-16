@@ -204,6 +204,23 @@ public static class UdpCommandClient
 
     public static bool HasDeviceError(string response) => response.Contains("$>ERR,", StringComparison.Ordinal);
 
+    /// <summary>校验衰减查询的必要字段，缺失或无效值不能按 0 dB 显示。</summary>
+    public static (double Att1, double? Att2) ReadAttenuation(RadioDevice device, string response)
+    {
+        var fields = ParseFields(response);
+        static double? ReadValue(IReadOnlyDictionary<string, string> values, string key) =>
+            values.TryGetValue(key, out var text) &&
+            double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var value) &&
+            double.IsFinite(value) && value >= 0 ? value : null;
+
+        var att1 = ReadValue(fields, "ATT1");
+        var att2 = RadioDeviceInfo.HasSecondAttenuator(device) ? ReadValue(fields, "ATT2") : null;
+        if (HasDeviceError(response) || !att1.HasValue ||
+            (RadioDeviceInfo.HasSecondAttenuator(device) && !att2.HasValue))
+            throw new IOException($"设备衰减响应不完整或无效：{response.Trim()}");
+        return (att1.Value, att2);
+    }
+
     /// <summary>保留失败指令和设备原始响应，避免多条设置指令共用含糊的错误提示。</summary>
     public static string DescribeSettingError(string command, string response)
     {

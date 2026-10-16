@@ -383,25 +383,18 @@ public sealed class DeviceConfigurationWindow : Window
         if (!fields.ContainsKey("RF") || !fields.ContainsKey("10M"))
             throw new IOException($"设备状态响应不完整：{response.Trim()}");
 
-        // 旧固件的综合状态帧只保留两位衰减小数；专用查询保留 0.25 dB 步进的完整精度。
+        // 旧固件的综合状态帧只保留两位衰减小数；专用查询保留完整精度并校验双衰减器字段。
         var attenuationResponse = await UdpCommandClient.SendAsync(_host, "$GETATT");
-        var attenuationFields = UdpCommandClient.ParseFields(attenuationResponse);
-        if (UdpCommandClient.HasDeviceError(attenuationResponse) ||
-            !attenuationFields.ContainsKey("ATT1") ||
-            (RadioDeviceInfo.HasSecondAttenuator(_device) && !attenuationFields.ContainsKey("ATT2")))
-            throw new IOException($"设备衰减读取失败：{attenuationResponse.Trim()}");
+        var attenuation = UdpCommandClient.ReadAttenuation(_device, attenuationResponse);
         var frequency = ParseNumber(fields, "RF");
         _status.FrequencyGHz = frequency is > 0 ? frequency : null;
         _status.Lo2594GHz = ParseNumber(fields, "LO2594");
         _status.Lo2594FixedGHz = ParseNumber(fields, "LO2594_650");
         _status.Lo2595GHz = ParseNumber(fields, "LO2595");
         _status.IfMHz = ParseInteger(fields, "IF");
-        _status.Attenuation1Db = ParseNumber(attenuationFields, "ATT1");
-        _status.Attenuation2Db = RadioDeviceInfo.HasSecondAttenuator(_device)
-            ? ParseNumber(attenuationFields, "ATT2") : null;
-        _status.AttenuationDb = _status.Attenuation1Db.HasValue
-            ? _status.Attenuation1Db.Value + (_status.Attenuation2Db ?? 0)
-            : null;
+        _status.Attenuation1Db = attenuation.Att1;
+        _status.Attenuation2Db = attenuation.Att2;
+        _status.AttenuationDb = attenuation.Att1 + (attenuation.Att2 ?? 0);
         _status.External10M = ParseInteger(fields, "10M") is int external ? external != 0 : null;
         _status.Lock2594 = ParseInteger(fields, "2594_650");
         _status.Lock2594If = ParseInteger(fields, "2594_IF");

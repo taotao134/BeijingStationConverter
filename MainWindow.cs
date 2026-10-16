@@ -1335,13 +1335,9 @@ public sealed class MainWindow : Window
         var versionResponse = await UdpCommandClient.SendAsync(host, "$GETVERSION");
         var versionFields = ParseAndVerifyDeviceModel(device, host, versionResponse);
         var stateResponse = await UdpCommandClient.SendAsync(host, "$GETRFSTATE");
-        // 与配置弹窗使用同一精度，避免综合状态帧截断 0.25 dB 步进值。
+        // 与配置弹窗使用同一精度，避免旧综合状态帧将 0.125 dB 步进截到两位小数。
         var attenuationResponse = await UdpCommandClient.SendAsync(host, "$GETATT");
-        var attenuationFields = UdpCommandClient.ParseFields(attenuationResponse);
-        if (UdpCommandClient.HasDeviceError(attenuationResponse) ||
-            !attenuationFields.ContainsKey("ATT1") ||
-            (RadioDeviceInfo.HasSecondAttenuator(device) && !attenuationFields.ContainsKey("ATT2")))
-            throw new IOException($"设备衰减查询失败：{attenuationResponse.Trim()}");
+        var attenuation = UdpCommandClient.ReadAttenuation(device, attenuationResponse);
         if (UdpCommandClient.HasDeviceError(stateResponse))
             throw new IOException($"设备状态查询失败：{stateResponse}");
 
@@ -1357,12 +1353,9 @@ public sealed class MainWindow : Window
         status.Lo2594FixedGHz = ParseDouble(stateFields, "LO2594_650");
         status.Lo2595GHz = ParseDouble(stateFields, "LO2595");
         status.IfMHz = ParseInt(stateFields, "IF");
-        status.Attenuation1Db = ParseDouble(attenuationFields, "ATT1");
-        status.Attenuation2Db = RadioDeviceInfo.HasSecondAttenuator(device)
-            ? ParseDouble(attenuationFields, "ATT2") : null;
-        status.AttenuationDb = status.Attenuation1Db.HasValue
-            ? status.Attenuation1Db.Value + (status.Attenuation2Db ?? 0)
-            : null;
+        status.Attenuation1Db = attenuation.Att1;
+        status.Attenuation2Db = attenuation.Att2;
+        status.AttenuationDb = attenuation.Att1 + (attenuation.Att2 ?? 0);
         status.External10M = ParseInt(stateFields, "10M") is int external ? external != 0 : null;
         status.Lock2594 = ParseInt(stateFields, "2594_650");
         status.Lock2594If = ParseInt(stateFields, "2594_IF");
