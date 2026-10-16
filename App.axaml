@@ -1,0 +1,46 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:fluent="using:Avalonia.Themes.Fluent"
+             x:Class="BeijingStationConverter.App">
+  <Application.Styles>
+    <fluent:FluentTheme />
+    <Style Selector="Button.save-device-ip /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="#408B69" />
+      <Setter Property="Foreground" Value="#FFFFFF" />
+    </Style>
+    <Style Selector="Button.save-device-ip:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="#357D5B" />
+      <Setter Property="Foreground" Value="#FFFFFF" />
+    </Style>
+    <Style Selector="Button.save-device-ip:pressed /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="#2D6D4E" />
+      <Setter Property="Foreground" Value="#FFFFFF" />
+    </Style>
+    <Style Selector="TextBox.udp-log-text, TextBox.udp-log-text:pointerover, TextBox.udp-log-text:focus, TextBox.udp-log-text:disabled">
+      <Setter Property="Background" Value="#FFFFFF" />
+      <Setter Property="Foreground" Value="#1D302D" />
+      <Setter Property="BorderBrush" Value="#A7B5B1" />
+    </Style>
+    <Style Selector="TextBox.udp-log-text /template/ TextPresenter">
+      <Setter Property="TextElement.Foreground" Value="#1D302D" />
+    </Style>
+    <Style Selector="TextBox.udp-log-text:pointerover /template/ TextPresenter">
+      <Setter Property="TextElement.Foreground" Value="#1D302D" />
+    </Style>
+    <Style Selector="TextBox.udp-log-text:focus /template/ TextPresenter">
+      <Setter Property="TextElement.Foreground" Value="#1D302D" />
+    </Style>
+    <Style Selector="TextBox.udp-log-text /template/ Border#PART_BorderElement">
+      <Setter Property="Background" Value="#FFFFFF" />
+      <Setter Property="BorderBrush" Value="#A7B5B1" />
+    </Style>
+    <Style Selector="TextBox.udp-log-text:pointerover /template/ Border#PART_BorderElement">
+      <Setter Property="Background" Value="#FFFFFF" />
+      <Setter Property="BorderBrush" Value="#A7B5B1" />
+    </Style>
+    <Style Selector="TextBox.udp-log-text:focus /template/ Border#PART_BorderElement">
+      <Setter Property="Background" Value="#FFFFFF" />
+      <Setter Property="BorderBrush" Value="#23867D" />
+    </Style>
+  </Application.Styles>
+</Application>
