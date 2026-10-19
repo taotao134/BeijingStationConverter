@@ -27,8 +27,7 @@ public sealed class DeviceConfigurationWindow : Window
     private NumericUpDown? _sFrequency;
     private NumericUpDown? _sAttenuation;
     private NumericUpDown? _kaFrequency;
-    private NumericUpDown? _kaAttenuation1;
-    private NumericUpDown? _kaAttenuation2;
+    private NumericUpDown? _kaAttenuation;
     private ComboBox? _reference;
     private ComboBox? _intermediateFrequency;
 
@@ -229,31 +228,19 @@ public sealed class DeviceConfigurationWindow : Window
             Width = 220
         };
         form.Children.Add(FormRow("频率", WithUnit(_kaFrequency, "MHz")));
-        var channelMax = _device == RadioDevice.KaUp ? 30m : 31.75m;
-        _kaAttenuation1 = new NumericUpDown
+        var totalAttenuation = _device == RadioDevice.KaDown;
+        var attenuationMax = totalAttenuation ? 40m : 30m;
+        _kaAttenuation = new NumericUpDown
         {
             Minimum = 0,
-            Maximum = channelMax,
+            Maximum = attenuationMax,
             Increment = 0.25m,
             FormatString = "0.00",
-            Value = (decimal)Math.Clamp(_status.Attenuation1Db ?? 0.0, 0.0, (double)channelMax),
+            Value = (decimal)Math.Clamp(_status.AttenuationDb ?? 0.0, 0.0, (double)attenuationMax),
             Width = 220
         };
-        form.Children.Add(FormRow("ATT1",
-            WithUnit(_kaAttenuation1, "dB")));
-        if (_device == RadioDevice.KaDown)
-        {
-            _kaAttenuation2 = new NumericUpDown
-            {
-                Minimum = 0,
-                Maximum = 31.75m,
-                Increment = 0.25m,
-                FormatString = "0.00",
-                Value = (decimal)Math.Clamp(_status.Attenuation2Db ?? 0.0, 0.0, 31.75),
-                Width = 220
-            };
-            form.Children.Add(FormRow("ATT2", WithUnit(_kaAttenuation2, "dB")));
-        }
+        form.Children.Add(FormRow(totalAttenuation ? "总衰减" : "衰减",
+            WithUnit(_kaAttenuation, "dB")));
         _reference = new ComboBox
         {
             ItemsSource = new[] { "内部参考源", "外部参考源" },
@@ -271,8 +258,8 @@ public sealed class DeviceConfigurationWindow : Window
         form.Children.Add(new TextBlock
         {
             Text = _device == RadioDevice.KaUp
-                ? "频率 22600–27200 MHz，步进 1 kHz；单路衰减 0–30 dB，步进 0.25 dB。"
-                : "频率 22600–27200 MHz，步进 1 kHz；ATT1、ATT2 各 0–31.75 dB，两路合计不超过 40 dB，步进 0.25 dB。",
+                ? "频率 22600–27200 MHz，步进 1 kHz；衰减 0–30 dB，步进 0.25 dB。"
+                : "频率 22600–27200 MHz，步进 1 kHz；总衰减 0–40 dB，步进 0.25 dB，设备自动分配到级联 ATT1/ATT2。",
             Foreground = MutedBrush,
             FontSize = 11,
             TextWrapping = TextWrapping.Wrap
@@ -347,10 +334,8 @@ public sealed class DeviceConfigurationWindow : Window
                 _sAttenuation.Value = (decimal)_status.AttenuationDb.Value;
             if (_kaFrequency is not null && _status.FrequencyGHz.HasValue)
                 _kaFrequency.Value = (decimal)(_status.FrequencyGHz.Value * 1000);
-            if (_kaAttenuation1 is not null && _status.Attenuation1Db.HasValue)
-                _kaAttenuation1.Value = (decimal)_status.Attenuation1Db.Value;
-            if (_kaAttenuation2 is not null && _status.Attenuation2Db.HasValue)
-                _kaAttenuation2.Value = (decimal)_status.Attenuation2Db.Value;
+            if (_kaAttenuation is not null && _status.AttenuationDb.HasValue)
+                _kaAttenuation.Value = (decimal)_status.AttenuationDb.Value;
             if (_reference is not null)
                 _reference.SelectedIndex = _status.External10M == true ? 1 : 0;
             if (_intermediateFrequency is not null)
@@ -467,20 +452,18 @@ public sealed class DeviceConfigurationWindow : Window
 
     private async Task SaveKaAsync()
     {
-        if (_kaFrequency?.Value is null || _kaAttenuation1?.Value is null ||
-            _reference is null || _intermediateFrequency is null ||
-            (_device == RadioDevice.KaDown && _kaAttenuation2?.Value is null))
+        if (_kaFrequency?.Value is null || _kaAttenuation?.Value is null ||
+            _reference is null || _intermediateFrequency is null)
             return;
 
         var frequencyMhz = _kaFrequency.Value.Value;
-        var attenuation1Db = _kaAttenuation1.Value.Value;
-        var attenuation2Db = _kaAttenuation2?.Value ?? 0m;
+        var attenuationDb = _kaAttenuation.Value.Value;
         var external = _reference.SelectedIndex == 1;
         var ifMHz = _intermediateFrequency.SelectedIndex switch { 1 => 720, 2 => 1200, _ => 70 };
-        if (attenuation1Db % 0.25m != 0 || attenuation2Db % 0.25m != 0 ||
-            (_device == RadioDevice.KaDown && attenuation1Db + attenuation2Db > 40m))
+        var attenuationMax = _device == RadioDevice.KaDown ? 40m : 30m;
+        if (attenuationDb % 0.25m != 0 || attenuationDb > attenuationMax)
         {
-            _feedback.Text = "衰减必须为 0.25 dB 的整数倍，下变频两路合计不能超过 40 dB。";
+            _feedback.Text = "衰减必须为 0.25 dB 的整数倍；Ka 上变频器不超过 30 dB，Ka 下变频器总衰减不超过 40 dB。";
             _feedback.Foreground = Brush.Parse("#A84F46");
             return;
         }
@@ -493,26 +476,8 @@ public sealed class DeviceConfigurationWindow : Window
             await SendSettingAsync($"$SET10MSEL,{(external ? 0 : 1)}");
             await SendSettingAsync($"$SETIFFREQ,{ifMHz}");
             await SendSettingAsync($"$SETFREQ,{((double)frequencyMhz / 1000).ToString("F6", CultureInfo.InvariantCulture)}");
-            if (_device == RadioDevice.KaUp)
-            {
-                await SendSettingAsync($"$SETATT,{((double)attenuation1Db).ToString("F2", CultureInfo.InvariantCulture)}");
-            }
-            else
-            {
-                var code1 = decimal.ToInt32(attenuation1Db * 4m);
-                var code2 = decimal.ToInt32(attenuation2Db * 4m);
-                // 先降低衰减的一路，避免交换两路值时触发设备的 40 dB 合计限制。
-                if (_status.Attenuation2Db is double oldAtt2 && attenuation2Db < (decimal)oldAtt2)
-                {
-                    await SendSettingAsync($"$SETATT2,{code2}");
-                    await SendSettingAsync($"$SETATT1,{code1}");
-                }
-                else
-                {
-                    await SendSettingAsync($"$SETATT1,{code1}");
-                    await SendSettingAsync($"$SETATT2,{code2}");
-                }
-            }
+            // Ka 下变频器的总衰减由固件一次分配到级联 ATT1 和 ATT2。
+            await SendSettingAsync($"$SETATT,{((double)attenuationDb).ToString("F2", CultureInfo.InvariantCulture)}");
             await ReadRfStateAsync();
             _feedback.Text = "Ka 波段参数已下发并保存到设备。";
             _feedback.Foreground = GreenBrush;
