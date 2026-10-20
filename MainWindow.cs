@@ -17,9 +17,11 @@ public sealed class MainWindow : Window
     private sealed record LogEntry(string Text, string? RemoteIp, RadioDevice? Device);
     private sealed record DeviceCardView(TextBlock Ip, Border Badge, TextBlock State,
         TextBlock Footer, TextBlock[] Values);
+    private sealed record DeviceOverviewCardView(Border Badge, TextBlock State, TextBlock[] Values);
 
     private enum Page
     {
+        DeviceOverview,
         Overview,
         Tftp,
         Network,
@@ -43,6 +45,7 @@ public sealed class MainWindow : Window
         .ToDictionary(device => device, _ => new DeviceStatus());
     private readonly Queue<LogEntry> _logEntries = new();
     private readonly Dictionary<RadioDevice, DeviceCardView> _deviceCards = new();
+    private readonly Dictionary<RadioDevice, DeviceOverviewCardView> _deviceOverviewCards = new();
     private readonly Dictionary<string, RadioDevice> _logSources = new(StringComparer.Ordinal);
     private readonly Dictionary<Page, Button> _navigation = new();
     private readonly ContentControl _pageHost = new();
@@ -53,9 +56,10 @@ public sealed class MainWindow : Window
     private TextBlock? _logActionStateText;
     private Button? _logScrollButton;
     private RadioDevice? _selectedLogDevice;
+    private Control? _deviceOverviewPage;
     private Control? _overviewPage;
     private Border? _sameIpNotice;
-    private Page _currentPage = Page.Overview;
+    private Page _currentPage = Page.DeviceOverview;
     private bool _logStarted;
     private bool _logAutoScroll = true;
     private bool _statusPollRunning;
@@ -131,7 +135,7 @@ public sealed class MainWindow : Window
         main.Children.Add(_pageHost);
         shell.Children.Add(main);
 
-        ShowPage(Page.Overview);
+        ShowPage(Page.DeviceOverview);
         return shell;
     }
 
@@ -157,6 +161,7 @@ public sealed class MainWindow : Window
             Margin = new Thickness(2, 0, 2, 24)
         });
 
+        AddNavigation(sidebarContent, Page.DeviceOverview, "设备概览");
         AddNavigation(sidebarContent, Page.Overview, "设备总览");
         AddNavigation(sidebarContent, Page.Tftp, "TFTP 升级");
         AddNavigation(sidebarContent, Page.Network, "变频器IP配置");
@@ -271,19 +276,145 @@ public sealed class MainWindow : Window
 
         var nextPage = page switch
         {
+            Page.DeviceOverview => _deviceOverviewPage ?? BuildDeviceOverviewPage(),
             Page.Overview => _overviewPage ?? BuildOverviewPage(),
             Page.Tftp => BuildTftpPage(),
             Page.Network => BuildNetworkPage(),
             _ => BuildLogsPage()
         };
         _pageHost.Content = nextPage;
-        if (page == Page.Overview)
+        if (page is Page.DeviceOverview or Page.Overview)
         {
             // 仅在导航时调整提示布局，周期刷新只更新现有卡片内容。
-            if (_sameIpNotice is not null)
+            if (page == Page.Overview && _sameIpNotice is not null)
                 _sameIpNotice.IsVisible = HasDuplicateDeviceIps();
             UpdateOverviewCards();
         }
+    }
+
+    private Control BuildDeviceOverviewPage()
+    {
+        var body = new Grid
+        {
+            RowDefinitions = new RowDefinitions("Auto,*"),
+            RowSpacing = 18,
+            Margin = new Thickness(26, 22, 26, 26)
+        };
+        var header = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 16 };
+        header.Children.Add(PageHeading("设备概览", "快速查看四类变频器关键状态，点击卡片进入配置"));
+        var refresh = ActionButton("刷新全部设备", TealBrush, async () => await RefreshAllDevicesAsync());
+        refresh.VerticalAlignment = VerticalAlignment.Top;
+        Grid.SetColumn(refresh, 1);
+        header.Children.Add(refresh);
+        body.Children.Add(header);
+
+        var cards = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("*,*"),
+            RowDefinitions = new RowDefinitions("*,*"),
+            ColumnSpacing = 16,
+            RowSpacing = 16
+        };
+        cards.Children.Add(BuildDeviceOverviewCard(RadioDevice.SUp, TealBrush));
+        var sDown = BuildDeviceOverviewCard(RadioDevice.SDown, OrangeBrush);
+        Grid.SetColumn(sDown, 1);
+        cards.Children.Add(sDown);
+        var kaUp = BuildDeviceOverviewCard(RadioDevice.KaUp, GoldBrush);
+        Grid.SetRow(kaUp, 1);
+        cards.Children.Add(kaUp);
+        var kaDown = BuildDeviceOverviewCard(RadioDevice.KaDown, GreenBrush);
+        Grid.SetRow(kaDown, 1);
+        Grid.SetColumn(kaDown, 1);
+        cards.Children.Add(kaDown);
+        Grid.SetRow(cards, 1);
+        body.Children.Add(cards);
+        _deviceOverviewPage = body;
+        return body;
+    }
+
+    private Button BuildDeviceOverviewCard(RadioDevice device, IBrush accent)
+    {
+        var content = new Grid
+        {
+            RowDefinitions = new RowDefinitions("40,2,*"),
+            RowSpacing = 8
+        };
+        var header = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        header.Children.Add(new TextBlock
+        {
+            Text = RadioDeviceInfo.DisplayName(device),
+            FontSize = 17,
+            FontWeight = FontWeight.SemiBold,
+            Foreground = InkBrush,
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        var stateText = new TextBlock { FontSize = 11 };
+        var badge = new Border
+        {
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(9, 5),
+            VerticalAlignment = VerticalAlignment.Top,
+            Child = stateText
+        };
+        Grid.SetColumn(badge, 1);
+        header.Children.Add(badge);
+        content.Children.Add(header);
+
+        var accentLine = new Border { Height = 2, Background = accent, Opacity = 0.85 };
+        Grid.SetRow(accentLine, 1);
+        content.Children.Add(accentLine);
+
+        var metrics = new Grid
+        {
+            RowDefinitions = new RowDefinitions("*,*,*,*,*"),
+            RowSpacing = 2
+        };
+        var labels = new[] { "频率", "增益", "10M源", "功率", "中频" };
+        var values = labels.Select((label, index) => AddOverviewMetric(metrics, index, label)).ToArray();
+        Grid.SetRow(metrics, 2);
+        content.Children.Add(metrics);
+        _deviceOverviewCards[device] = new DeviceOverviewCardView(badge, stateText, values);
+
+        var cardLayout = new Border
+        {
+            Width = DeviceCardDesignWidth,
+            Height = DeviceCardDesignHeight,
+            Padding = new Thickness(18, 14),
+            Child = content
+        };
+        var scalableContent = new Viewbox
+        {
+            Child = cardLayout,
+            Stretch = Stretch.Uniform,
+            StretchDirection = StretchDirection.DownOnly
+        };
+        var cardViewport = new Border { Child = scalableContent };
+        cardViewport.SizeChanged += (_, args) =>
+        {
+            var size = args.NewSize;
+            if (size.Width <= 0 || size.Height <= 0)
+                return;
+
+            var scale = Math.Min(1, Math.Min(size.Width / DeviceCardDesignWidth, size.Height / DeviceCardDesignHeight));
+            cardLayout.Width = size.Width / scale;
+            cardLayout.Height = size.Height / scale;
+        };
+
+        var card = new Button
+        {
+            Content = cardViewport,
+            Background = Brushes.White,
+            BorderBrush = Brush.Parse("#DDE5E2"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            VerticalContentAlignment = VerticalAlignment.Stretch,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Stretch,
+            Padding = new Thickness(0)
+        };
+        card.Click += (_, _) => OpenDeviceConfiguration(device);
+        return card;
     }
 
     private Control BuildOverviewPage()
@@ -439,36 +570,36 @@ public sealed class MainWindow : Window
                 ? new[]
                 {
                     "频率", "10 MHz", "中频",
-                    "ATT1", "ATT2", "本振 2594_650",
-                    "本振 2594", "本振 2595", "2595 偏移",
+                    "增益", "本振 2594_650", "本振 2594",
+                    "本振 2595", "2595 偏移",
                     "2594_650", "2594_IF",
-                    "2595", "2594 功率码", "2595 功率码"
+                    "2595", "2594 功率码", "2595 功率码", "功率"
                 }
                 : new[]
                 {
                     "频率", "10 MHz", "中频",
-                    "ATT1", "本振 2594_650", "本振 2594",
+                    "增益", "本振 2594_650", "本振 2594",
                     "本振 2595", "2595 偏移",
                     "2594_650", "2594_IF", "2595",
-                    "2594 功率码", "2595 功率码"
+                    "2594 功率码", "2595 功率码", "功率"
                 };
 
         return device == RadioDevice.SUp
             ? new[]
             {
-                "频率", "衰减", "10 MHz",
+                "频率", "增益", "10 MHz",
                 "中频", "ATT1", "本振 2594",
                 "本振 2595", "共同偏移", "2594 锁定",
                 "2594 IF 锁定", "2595 锁定", "2594 功率码",
-                "2595 功率码"
+                "2595 功率码", "功率"
             }
             : new[]
             {
-                "频率", "衰减", "10 MHz",
+                "频率", "增益", "10 MHz",
                 "中频", "ATT1", "ATT2",
                 "本振 2594", "本振 2595", "共同偏移",
                 "2594 锁定", "2594 IF 锁定", "2595 锁定",
-                "2594 功率码", "2595 功率码"
+                "2594 功率码", "2595 功率码", "功率"
             };
     }
 
@@ -478,27 +609,26 @@ public sealed class MainWindow : Window
             status.FrequencyGHz.HasValue ? $"{status.FrequencyGHz.Value * 1000:0.000} MHz" : "-- MHz",
             status.External10M.HasValue ? status.External10M.Value ? "外部" : "内部" : "--",
             status.IfMHz.HasValue ? $"{status.IfMHz} MHz" : "-- MHz",
-            status.Attenuation1Db.HasValue ? $"{status.Attenuation1Db.Value:0.000} dB" : "-- dB",
-            status.Attenuation2Db.HasValue ? $"{status.Attenuation2Db.Value:0.000} dB" : "-- dB",
+            FormatKaGain(device, status),
             status.Lo2594FixedGHz.HasValue ? $"{status.Lo2594FixedGHz.Value:0.000000} GHz" : "-- GHz",
             status.Lo2594GHz.HasValue ? $"{status.Lo2594GHz.Value:0.000000} GHz" : "-- GHz",
             status.Lo2595GHz.HasValue ? $"{status.Lo2595GHz.Value:0.0000000} GHz" : "-- GHz",
             status.ShiftMHz.HasValue ? $"{status.ShiftMHz} MHz" : "-- MHz",
             FormatLockState(status.Lock2594), FormatLockState(status.Lock2594If), FormatLockState(status.Lock2595),
-            FormatPower(status.Power2594), FormatPower(status.Power2595)
+            FormatPower(status.Power2594), FormatPower(status.Power2595), FormatPowerDbm(status)
         }
         : new[]
         {
             status.FrequencyGHz.HasValue ? $"{status.FrequencyGHz.Value * 1000:0.000} MHz" : "-- MHz",
             status.External10M.HasValue ? status.External10M.Value ? "外部" : "内部" : "--",
             status.IfMHz.HasValue ? $"{status.IfMHz} MHz" : "-- MHz",
-            status.Attenuation1Db.HasValue ? $"{status.Attenuation1Db.Value:0.000} dB" : "-- dB",
+            FormatKaGain(device, status),
             status.Lo2594FixedGHz.HasValue ? $"{status.Lo2594FixedGHz.Value:0.000000} GHz" : "-- GHz",
             status.Lo2594GHz.HasValue ? $"{status.Lo2594GHz.Value:0.000000} GHz" : "-- GHz",
             status.Lo2595GHz.HasValue ? $"{status.Lo2595GHz.Value:0.0000000} GHz" : "-- GHz",
             status.ShiftMHz.HasValue ? $"{status.ShiftMHz} MHz" : "-- MHz",
             FormatLockState(status.Lock2594), FormatLockState(status.Lock2594If), FormatLockState(status.Lock2595),
-            FormatPower(status.Power2594), FormatPower(status.Power2595)
+            FormatPower(status.Power2594), FormatPower(status.Power2595), FormatPowerDbm(status)
         };
 
     private static string[] GetCardValues(RadioDevice device, DeviceStatus status)
@@ -519,7 +649,7 @@ public sealed class MainWindow : Window
                 status.Lo2595GHz.HasValue ? $"{status.Lo2595GHz.Value:0.000000} GHz" : "-- GHz",
                 status.ShiftMHz.HasValue ? $"{status.ShiftMHz} MHz" : "-- MHz",
                 FormatLockState(status.Lock2594), FormatLockState(status.Lock2594If), FormatLockState(status.Lock2595),
-                FormatPower(status.Power2594), FormatPower(status.Power2595)
+                FormatPower(status.Power2594), FormatPower(status.Power2595), FormatPowerDbm(status)
             }
             : new[]
             {
@@ -532,9 +662,19 @@ public sealed class MainWindow : Window
                 status.Lo2595GHz.HasValue ? $"{status.Lo2595GHz.Value:0.000000} GHz" : "-- GHz",
                 status.ShiftMHz.HasValue ? $"{status.ShiftMHz} MHz" : "-- MHz",
                 FormatLockState(status.Lock2594), FormatLockState(status.Lock2594If), FormatLockState(status.Lock2595),
-                FormatPower(status.Power2594), FormatPower(status.Power2595)
+                FormatPower(status.Power2594), FormatPower(status.Power2595), FormatPowerDbm(status)
             };
     }
+
+    private static string[] GetDeviceOverviewValues(RadioDevice device, DeviceStatus status) =>
+        new[]
+        {
+            status.FrequencyGHz.HasValue ? $"{status.FrequencyGHz.Value * 1000:0.000} MHz" : "-- MHz",
+            RadioDeviceInfo.IsKaDevice(device) ? FormatKaGain(device, status) : FormatSGain(status),
+            status.External10M.HasValue ? status.External10M.Value ? "外部" : "内部" : "--",
+            FormatPowerDbm(status),
+            status.IfMHz.HasValue ? $"{status.IfMHz} MHz" : "-- MHz"
+        };
 
     private void UpdateOverviewCards()
     {
@@ -556,6 +696,54 @@ public sealed class MainWindow : Window
                 ToolTip.SetTip(view.Values[index], values[index]);
             }
         }
+
+        foreach (var (device, view) in _deviceOverviewCards)
+        {
+            var status = _deviceStatus[device];
+            var online = status.Online && (DateTime.Now - status.LastSeen).TotalSeconds < 12;
+            view.State.Text = online ? "在线" : "未连接";
+            view.State.Foreground = online ? GreenBrush : MutedBrush;
+            view.Badge.Background = Brush.Parse(online ? "#E6F3EC" : "#EFF2F1");
+            var values = GetDeviceOverviewValues(device, status);
+            for (var index = 0; index < values.Length; index++)
+            {
+                view.Values[index].Text = values[index];
+                ToolTip.SetTip(view.Values[index], values[index]);
+            }
+        }
+    }
+
+    private static TextBlock AddOverviewMetric(Grid grid, int row, string label)
+    {
+        var panel = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("Auto,*"),
+            ColumnSpacing = 14,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        var labelText = new TextBlock
+        {
+            Text = label,
+            FontSize = 16,
+            Foreground = MutedBrush,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        ToolTip.SetTip(labelText, label);
+        panel.Children.Add(labelText);
+        var valueText = new TextBlock
+        {
+            FontSize = 21,
+            FontWeight = FontWeight.SemiBold,
+            Foreground = InkBrush,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        Grid.SetColumn(valueText, 1);
+        panel.Children.Add(valueText);
+        Grid.SetRow(panel, row);
+        grid.Children.Add(panel);
+        return valueText;
     }
 
     private static TextBlock AddMetric(Grid grid, int column, int row, string label)
@@ -586,6 +774,31 @@ public sealed class MainWindow : Window
     };
 
     private static string FormatPower(int? power) => power.HasValue ? power.Value.ToString(CultureInfo.InvariantCulture) : "--";
+
+    private static string FormatKaGain(RadioDevice device, DeviceStatus status) =>
+        status.AttenuationDb.HasValue
+            ? $"{RadioDeviceInfo.KaGainFromAttenuation(device, status.AttenuationDb.Value):0.00} dB"
+            : "-- dB";
+
+    private static string FormatSGain(DeviceStatus status) =>
+        status.AttenuationDb.HasValue
+            ? $"{status.AttenuationDb.Value:0.000} dB"
+            : "-- dB";
+
+    private static string FormatPowerDbm(DeviceStatus status)
+    {
+        if (!status.PowerFromControlBoard || !status.PowerDbm.HasValue ||
+            !double.IsFinite(status.PowerDbm.Value))
+            return "--dBm";
+
+        var powerDbm = status.PowerDbm.Value;
+        if (powerDbm < -30.0)
+            return "<-30dBm";
+        if (powerDbm > 16.0)
+            return ">16dBm";
+
+        return $"{powerDbm:+0.00;-0.00;0} dBm";
+    }
 
     private Control BuildTftpPage()
     {
@@ -1271,6 +1484,8 @@ public sealed class MainWindow : Window
             status.Lock2595 = ParseInt(fields, "LOCK2595");
             status.Power2594 = ParseInt(fields, "POWER2594");
             status.Power2595 = ParseInt(fields, "POWER2595");
+            status.PowerDbm = ParseDouble(fields, "POWER_DBM");
+            status.PowerFromControlBoard = ParseInt(fields, "POWER_VALID") == 1 || status.PowerDbm.HasValue;
             status.ShiftMHz = ParseInt(fields, "SHIFT");
             var ip = fields.GetValueOrDefault("IP", remote.Address.ToString());
             if (IPAddress.TryParse(ip, out _))
@@ -1362,6 +1577,8 @@ public sealed class MainWindow : Window
         status.Lock2595 = ParseInt(stateFields, "2595");
         status.Power2595 = ParseInt(stateFields, "POWER");
         status.Power2594 = ParseInt(stateFields, "POWER2594");
+        status.PowerDbm = ParseDouble(stateFields, "POWER_DBM");
+        status.PowerFromControlBoard = ParseInt(stateFields, "POWER_VALID") == 1 || status.PowerDbm.HasValue;
         status.ShiftMHz = ParseInt(stateFields, "SHIFT");
         status.Online = true;
         status.Error = null;

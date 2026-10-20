@@ -70,6 +70,30 @@ public static class RadioDeviceInfo
     public static bool HasSecondAttenuator(RadioDevice device) =>
         device is RadioDevice.SDown or RadioDevice.KaDown;
 
+    /// <summary>返回显示板使用的 Ka 增益互补基准，单位 dB。</summary>
+    public static decimal KaGainOffsetDb(RadioDevice device) => device == RadioDevice.KaDown ? 55m : 35m;
+
+    /// <summary>返回显示板允许的 Ka 增益范围，单位 dB。</summary>
+    public static (decimal Min, decimal Max) KaGainRangeDb(RadioDevice device) =>
+        device == RadioDevice.KaDown ? (15m, 55m) : (5m, 35m);
+
+    /// <summary>按显示板规则将控制板衰减换算为用户可见增益，单位 dB。</summary>
+    public static decimal KaGainFromAttenuation(RadioDevice device, double attenuationDb)
+    {
+        var (min, max) = KaGainRangeDb(device);
+        var gain = KaGainOffsetDb(device) - (decimal)attenuationDb;
+        return Math.Clamp(gain, min, max);
+    }
+
+    /// <summary>按显示板规则将用户输入的 Ka 增益换算为控制板衰减，单位 dB。</summary>
+    public static bool TryKaAttenuationFromGain(RadioDevice device, decimal gainDb, out decimal attenuationDb)
+    {
+        var (min, max) = KaGainRangeDb(device);
+        attenuationDb = KaGainOffsetDb(device) - gainDb;
+        return IsKaDevice(device) && gainDb >= min && gainDb <= max &&
+               gainDb % 0.25m == 0m && attenuationDb >= 0m;
+    }
+
     /// <summary>校验设备 IPv4 主机地址，并返回固件网络命令所需的四段字节。</summary>
     public static bool TryParseDeviceIp(string text, out byte[] octets)
     {
@@ -104,6 +128,8 @@ public sealed class DeviceStatus
     public int? Lock2595 { get; set; }
     public int? Power2594 { get; set; }
     public int? Power2595 { get; set; }
+    public double? PowerDbm { get; set; }
+    public bool PowerFromControlBoard { get; set; }
     public int? ShiftMHz { get; set; }
     public DateTime LastSeen { get; set; }
     public string? Error { get; set; }

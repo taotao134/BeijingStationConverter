@@ -13,6 +13,8 @@ public sealed class DeviceConfigurationWindow : Window
     private static readonly IBrush MutedBrush = Brush.Parse("#6F7F7C");
     private static readonly IBrush TealBrush = Brush.Parse("#23867D");
     private static readonly IBrush GreenBrush = Brush.Parse("#408B69");
+    private const decimal KaFrequencyMinMhz = 22600m;
+    private const decimal KaFrequencyMaxMhz = 27200m;
 
     private readonly RadioDevice _device;
     private string _host;
@@ -27,7 +29,7 @@ public sealed class DeviceConfigurationWindow : Window
     private NumericUpDown? _sFrequency;
     private NumericUpDown? _sAttenuation;
     private NumericUpDown? _kaFrequency;
-    private NumericUpDown? _kaAttenuation;
+    private NumericUpDown? _kaGain;
     private ComboBox? _reference;
     private ComboBox? _intermediateFrequency;
 
@@ -58,6 +60,8 @@ public sealed class DeviceConfigurationWindow : Window
             Lock2595 = status.Lock2595,
             Power2594 = status.Power2594,
             Power2595 = status.Power2595,
+            PowerDbm = status.PowerDbm,
+            PowerFromControlBoard = status.PowerFromControlBoard,
             ShiftMHz = status.ShiftMHz,
             LastSeen = status.LastSeen
         };
@@ -188,7 +192,7 @@ public sealed class DeviceConfigurationWindow : Window
             Value = (decimal)(_status.AttenuationDb ?? 0),
             Width = 220
         };
-        form.Children.Add(FormRow(isUp ? "衰减" : "总衰减", WithUnit(_sAttenuation, "dB")));
+        form.Children.Add(FormRow(isUp ? "增益" : "总增益", WithUnit(_sAttenuation, "dB")));
 
         _reference = new ComboBox
         {
@@ -206,8 +210,8 @@ public sealed class DeviceConfigurationWindow : Window
 
         form.Children.Add(new TextBlock
         {
-            Text = isUp ? "频率 2000–2400 MHz，步进 1 kHz；衰减 0–31.75 dB，步进 0.25 dB。" :
-                "频率 2000–2400 MHz，步进 1 kHz；总衰减 0–63.75 dB，步进 0.125 dB。",
+            Text = isUp ? "频率 2000–2400 MHz，步进 1 kHz；增益 0–31.75 dB，步进 0.25 dB。" :
+                "频率 2000–2400 MHz，步进 1 kHz；总增益 0–63.75 dB，步进 0.125 dB。",
             Foreground = MutedBrush,
             FontSize = 11,
             TextWrapping = TextWrapping.Wrap
@@ -220,27 +224,29 @@ public sealed class DeviceConfigurationWindow : Window
         var form = new StackPanel { Spacing = 16 };
         _kaFrequency = new NumericUpDown
         {
-            Minimum = 22600m,
-            Maximum = 27200m,
+            Minimum = KaFrequencyMinMhz,
+            Maximum = KaFrequencyMaxMhz,
             Increment = 0.001m,
             FormatString = "0.000",
-            Value = (decimal)Math.Clamp((_status.FrequencyGHz ?? 24.9) * 1000.0, 22600.0, 27200.0),
+            Value = (decimal)Math.Clamp((_status.FrequencyGHz ?? 24.9) * 1000.0,
+                (double)KaFrequencyMinMhz, (double)KaFrequencyMaxMhz),
             Width = 220
         };
         form.Children.Add(FormRow("频率", WithUnit(_kaFrequency, "MHz")));
-        var totalAttenuation = _device == RadioDevice.KaDown;
-        var attenuationMax = totalAttenuation ? 40m : 30m;
-        _kaAttenuation = new NumericUpDown
+        var (gainMin, gainMax) = RadioDeviceInfo.KaGainRangeDb(_device);
+        var gain = _status.AttenuationDb.HasValue
+            ? RadioDeviceInfo.KaGainFromAttenuation(_device, _status.AttenuationDb.Value)
+            : RadioDeviceInfo.KaGainOffsetDb(_device);
+        _kaGain = new NumericUpDown
         {
-            Minimum = 0,
-            Maximum = attenuationMax,
+            Minimum = gainMin,
+            Maximum = gainMax,
             Increment = 0.25m,
             FormatString = "0.00",
-            Value = (decimal)Math.Clamp(_status.AttenuationDb ?? 0.0, 0.0, (double)attenuationMax),
+            Value = Math.Clamp(gain, gainMin, gainMax),
             Width = 220
         };
-        form.Children.Add(FormRow(totalAttenuation ? "总衰减" : "衰减",
-            WithUnit(_kaAttenuation, "dB")));
+        form.Children.Add(FormRow("增益", WithUnit(_kaGain, "dB")));
         _reference = new ComboBox
         {
             ItemsSource = new[] { "内部参考源", "外部参考源" },
@@ -258,8 +264,8 @@ public sealed class DeviceConfigurationWindow : Window
         form.Children.Add(new TextBlock
         {
             Text = _device == RadioDevice.KaUp
-                ? "频率 22600–27200 MHz，步进 1 kHz；衰减 0–30 dB，步进 0.25 dB。"
-                : "频率 22600–27200 MHz，步进 1 kHz；总衰减 0–40 dB，步进 0.25 dB，设备自动分配到级联 ATT1/ATT2。",
+                ? "频率 22600–27200 MHz，步进 1 kHz；增益 5.00–35.00 dB，步进 0.25 dB。"
+                : "频率 22600–27200 MHz，步进 1 kHz；增益 15.00–55.00 dB，步进 0.25 dB，设备自动分配到级联 ATT1/ATT2。",
             Foreground = MutedBrush,
             FontSize = 11,
             TextWrapping = TextWrapping.Wrap
@@ -333,9 +339,15 @@ public sealed class DeviceConfigurationWindow : Window
             if (_sAttenuation is not null && _status.AttenuationDb.HasValue)
                 _sAttenuation.Value = (decimal)_status.AttenuationDb.Value;
             if (_kaFrequency is not null && _status.FrequencyGHz.HasValue)
-                _kaFrequency.Value = (decimal)(_status.FrequencyGHz.Value * 1000);
-            if (_kaAttenuation is not null && _status.AttenuationDb.HasValue)
-                _kaAttenuation.Value = (decimal)_status.AttenuationDb.Value;
+                _kaFrequency.Value = (decimal)Math.Clamp(_status.FrequencyGHz.Value * 1000.0,
+                    (double)KaFrequencyMinMhz, (double)KaFrequencyMaxMhz);
+            if (_kaGain is not null && _status.AttenuationDb.HasValue)
+            {
+                var (gainMin, gainMax) = RadioDeviceInfo.KaGainRangeDb(_device);
+                _kaGain.Value = Math.Clamp(
+                    RadioDeviceInfo.KaGainFromAttenuation(_device, _status.AttenuationDb.Value),
+                    gainMin, gainMax);
+            }
             if (_reference is not null)
                 _reference.SelectedIndex = _status.External10M == true ? 1 : 0;
             if (_intermediateFrequency is not null)
@@ -386,6 +398,8 @@ public sealed class DeviceConfigurationWindow : Window
         _status.Lock2595 = ParseInteger(fields, "2595");
         _status.Power2594 = ParseInteger(fields, "POWER2594");
         _status.Power2595 = ParseInteger(fields, "POWER");
+        _status.PowerDbm = ParseNumber(fields, "POWER_DBM");
+        _status.PowerFromControlBoard = ParseInteger(fields, "POWER_VALID") == 1 || _status.PowerDbm.HasValue;
         _status.ShiftMHz = ParseInteger(fields, "SHIFT");
         _status.IpAddress = _host;
         _status.Online = true;
@@ -417,7 +431,7 @@ public sealed class DeviceConfigurationWindow : Window
             await SendSettingAsync($"$SETFREQ,{((double)frequencyMhz / 1000).ToString("F6", CultureInfo.InvariantCulture)}");
             await SendSettingAsync($"$SETATT,{((double)attenuationDb).ToString("F3", CultureInfo.InvariantCulture)}");
             await ReadRfStateAsync();
-            _feedback.Text = "配置已下发，频率和衰减已保存到设备。";
+            _feedback.Text = "配置已下发，频率和增益已保存到设备。";
             _feedback.Foreground = GreenBrush;
             _onUpdated(_status);
         }
@@ -452,18 +466,24 @@ public sealed class DeviceConfigurationWindow : Window
 
     private async Task SaveKaAsync()
     {
-        if (_kaFrequency?.Value is null || _kaAttenuation?.Value is null ||
+        if (_kaFrequency?.Value is null || _kaGain?.Value is null ||
             _reference is null || _intermediateFrequency is null)
             return;
 
         var frequencyMhz = _kaFrequency.Value.Value;
-        var attenuationDb = _kaAttenuation.Value.Value;
+        var gainDb = _kaGain.Value.Value;
         var external = _reference.SelectedIndex == 1;
         var ifMHz = _intermediateFrequency.SelectedIndex switch { 1 => 720, 2 => 1200, _ => 70 };
-        var attenuationMax = _device == RadioDevice.KaDown ? 40m : 30m;
-        if (attenuationDb % 0.25m != 0 || attenuationDb > attenuationMax)
+        var (gainMin, gainMax) = RadioDeviceInfo.KaGainRangeDb(_device);
+        if (frequencyMhz < KaFrequencyMinMhz || frequencyMhz > KaFrequencyMaxMhz)
         {
-            _feedback.Text = "衰减必须为 0.25 dB 的整数倍；Ka 上变频器不超过 30 dB，Ka 下变频器总衰减不超过 40 dB。";
+            _feedback.Text = "Ka 波段频率范围为 22.600–27.200 GHz。";
+            _feedback.Foreground = Brush.Parse("#A84F46");
+            return;
+        }
+        if (!RadioDeviceInfo.TryKaAttenuationFromGain(_device, gainDb, out var attenuationDb))
+        {
+            _feedback.Text = $"增益必须在 {gainMin:0.00}–{gainMax:0.00} dB 范围内，步进 0.25 dB。";
             _feedback.Foreground = Brush.Parse("#A84F46");
             return;
         }
