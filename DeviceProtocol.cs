@@ -67,6 +67,48 @@ public static class RadioDeviceInfo
 
     public static bool IsKaDevice(RadioDevice device) => device is RadioDevice.KaUp or RadioDevice.KaDown;
 
+    /// <summary>返回 S 波段设备允许的增益范围，单位 dB。</summary>
+    public static (decimal Min, decimal Max) SGainRangeDb(RadioDevice device) =>
+        device == RadioDevice.SDown ? (0m, 40m) : (5m, 35m);
+
+    /// <summary>返回 S 波段设备增益设置的硬件步进，单位 dB。</summary>
+    public static decimal SGainStepDb(RadioDevice device) => device == RadioDevice.SDown ? 0.125m : 0.25m;
+
+    /// <summary>返回 S 波段设备的最大增益基准，单位 dB。</summary>
+    public static decimal SGainOffsetDb(RadioDevice device) => device == RadioDevice.SDown ? 40m : 35m;
+
+    /// <summary>按 S 波段设备基准将控制板衰减换算为用户可见增益，单位 dB。</summary>
+    public static decimal SGainFromAttenuation(RadioDevice device, double attenuationDb)
+    {
+        var (min, max) = SGainRangeDb(device);
+        return Math.Clamp(SGainOffsetDb(device) - (decimal)attenuationDb, min, max);
+    }
+
+    /// <summary>校验 S 波段增益并换算为控制板衰减，单位 dB。</summary>
+    public static bool TrySAttenuationFromGain(RadioDevice device, decimal gainDb, out decimal attenuationDb)
+    {
+        var (min, max) = SGainRangeDb(device);
+        var step = SGainStepDb(device);
+        attenuationDb = SGainOffsetDb(device) - gainDb;
+        return IsSDevice(device) && gainDb >= min && gainDb <= max &&
+               gainDb % step == 0m && attenuationDb >= 0m;
+    }
+
+    /// <summary>按设备波段限制功率读数显示范围，单位 dBm。</summary>
+    public static string FormatPowerDbm(RadioDevice device, bool valid, double? powerDbm)
+    {
+        if (!valid || !powerDbm.HasValue || !double.IsFinite(powerDbm.Value))
+            return "--dBm";
+
+        if (powerDbm.Value < -30.0)
+            return "<-30dBm";
+        var maxPower = IsSDevice(device) ? 15.0 : 16.0;
+        if (powerDbm.Value > maxPower)
+            return IsSDevice(device) ? ">15dBm" : ">16dBm";
+
+        return $"{powerDbm.Value:+0.00;-0.00;0} dBm";
+    }
+
     public static bool HasSecondAttenuator(RadioDevice device) =>
         device is RadioDevice.SDown or RadioDevice.KaDown;
 

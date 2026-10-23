@@ -24,6 +24,7 @@ public sealed class MainWindow : Window
         DeviceOverview,
         Overview,
         Tftp,
+        Calibration,
         Network,
         Logs
     }
@@ -63,6 +64,13 @@ public sealed class MainWindow : Window
     private bool _logStarted;
     private bool _logAutoScroll = true;
     private bool _statusPollRunning;
+    private bool _calibrationImportRunning;
+    private CalibrationDocument? _calibrationDocument;
+    private string? _calibrationFilePath;
+    private TextBlock? _calibrationFileText;
+    private TextBlock? _calibrationFeedback;
+    private StackPanel? _calibrationPreviewRows;
+    private Button? _calibrationImportButton;
     private string? _logStartError;
 
     public MainWindow()
@@ -164,6 +172,7 @@ public sealed class MainWindow : Window
         AddNavigation(sidebarContent, Page.DeviceOverview, "设备概览");
         AddNavigation(sidebarContent, Page.Overview, "设备总览");
         AddNavigation(sidebarContent, Page.Tftp, "TFTP 升级");
+        AddNavigation(sidebarContent, Page.Calibration, "校准导入");
         AddNavigation(sidebarContent, Page.Network, "变频器IP配置");
         AddNavigation(sidebarContent, Page.Logs, "UDP 日志");
 
@@ -279,6 +288,7 @@ public sealed class MainWindow : Window
             Page.DeviceOverview => _deviceOverviewPage ?? BuildDeviceOverviewPage(),
             Page.Overview => _overviewPage ?? BuildOverviewPage(),
             Page.Tftp => BuildTftpPage(),
+            Page.Calibration => BuildCalibrationPage(),
             Page.Network => BuildNetworkPage(),
             _ => BuildLogsPage()
         };
@@ -615,7 +625,8 @@ public sealed class MainWindow : Window
             status.Lo2595GHz.HasValue ? $"{status.Lo2595GHz.Value:0.0000000} GHz" : "-- GHz",
             status.ShiftMHz.HasValue ? $"{status.ShiftMHz} MHz" : "-- MHz",
             FormatLockState(status.Lock2594), FormatLockState(status.Lock2594If), FormatLockState(status.Lock2595),
-            FormatPower(status.Power2594), FormatPower(status.Power2595), FormatPowerDbm(status)
+            FormatPower(status.Power2594), FormatPower(status.Power2595),
+            RadioDeviceInfo.FormatPowerDbm(device, status.PowerFromControlBoard, status.PowerDbm)
         }
         : new[]
         {
@@ -628,7 +639,8 @@ public sealed class MainWindow : Window
             status.Lo2595GHz.HasValue ? $"{status.Lo2595GHz.Value:0.0000000} GHz" : "-- GHz",
             status.ShiftMHz.HasValue ? $"{status.ShiftMHz} MHz" : "-- MHz",
             FormatLockState(status.Lock2594), FormatLockState(status.Lock2594If), FormatLockState(status.Lock2595),
-            FormatPower(status.Power2594), FormatPower(status.Power2595), FormatPowerDbm(status)
+            FormatPower(status.Power2594), FormatPower(status.Power2595),
+            RadioDeviceInfo.FormatPowerDbm(device, status.PowerFromControlBoard, status.PowerDbm)
         };
 
     private static string[] GetCardValues(RadioDevice device, DeviceStatus status)
@@ -649,7 +661,8 @@ public sealed class MainWindow : Window
                 status.Lo2595GHz.HasValue ? $"{status.Lo2595GHz.Value:0.000000} GHz" : "-- GHz",
                 status.ShiftMHz.HasValue ? $"{status.ShiftMHz} MHz" : "-- MHz",
                 FormatLockState(status.Lock2594), FormatLockState(status.Lock2594If), FormatLockState(status.Lock2595),
-                FormatPower(status.Power2594), FormatPower(status.Power2595), FormatPowerDbm(status)
+                FormatPower(status.Power2594), FormatPower(status.Power2595),
+                RadioDeviceInfo.FormatPowerDbm(device, status.PowerFromControlBoard, status.PowerDbm)
             }
             : new[]
             {
@@ -662,7 +675,8 @@ public sealed class MainWindow : Window
                 status.Lo2595GHz.HasValue ? $"{status.Lo2595GHz.Value:0.000000} GHz" : "-- GHz",
                 status.ShiftMHz.HasValue ? $"{status.ShiftMHz} MHz" : "-- MHz",
                 FormatLockState(status.Lock2594), FormatLockState(status.Lock2594If), FormatLockState(status.Lock2595),
-                FormatPower(status.Power2594), FormatPower(status.Power2595), FormatPowerDbm(status)
+                FormatPower(status.Power2594), FormatPower(status.Power2595),
+                RadioDeviceInfo.FormatPowerDbm(device, status.PowerFromControlBoard, status.PowerDbm)
             };
     }
 
@@ -670,9 +684,9 @@ public sealed class MainWindow : Window
         new[]
         {
             status.FrequencyGHz.HasValue ? $"{status.FrequencyGHz.Value * 1000:0.000} MHz" : "-- MHz",
-            RadioDeviceInfo.IsKaDevice(device) ? FormatKaGain(device, status) : FormatSGain(status),
+            RadioDeviceInfo.IsKaDevice(device) ? FormatKaGain(device, status) : FormatSGain(device, status),
             status.External10M.HasValue ? status.External10M.Value ? "外部" : "内部" : "--",
-            FormatPowerDbm(status),
+            RadioDeviceInfo.FormatPowerDbm(device, status.PowerFromControlBoard, status.PowerDbm),
             status.IfMHz.HasValue ? $"{status.IfMHz} MHz" : "-- MHz"
         };
 
@@ -780,25 +794,10 @@ public sealed class MainWindow : Window
             ? $"{RadioDeviceInfo.KaGainFromAttenuation(device, status.AttenuationDb.Value):0.00} dB"
             : "-- dB";
 
-    private static string FormatSGain(DeviceStatus status) =>
+    private static string FormatSGain(RadioDevice device, DeviceStatus status) =>
         status.AttenuationDb.HasValue
-            ? $"{status.AttenuationDb.Value:0.000} dB"
+            ? $"{RadioDeviceInfo.SGainFromAttenuation(device, status.AttenuationDb.Value):0.000} dB"
             : "-- dB";
-
-    private static string FormatPowerDbm(DeviceStatus status)
-    {
-        if (!status.PowerFromControlBoard || !status.PowerDbm.HasValue ||
-            !double.IsFinite(status.PowerDbm.Value))
-            return "--dBm";
-
-        var powerDbm = status.PowerDbm.Value;
-        if (powerDbm < -30.0)
-            return "<-30dBm";
-        if (powerDbm > 16.0)
-            return ">16dBm";
-
-        return $"{powerDbm:+0.00;-0.00;0} dBm";
-    }
 
     private Control BuildTftpPage()
     {
@@ -1027,6 +1026,266 @@ public sealed class MainWindow : Window
         form.Children.Add(state);
         body.Children.Add(form);
         return new ScrollViewer { Content = body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+    }
+
+    private Control BuildCalibrationPage()
+    {
+        var body = PageBody();
+        body.Children.Add(PageHeading("Ka 下变频校准导入", "导入一块显示板的完整 CSV 校准表"));
+
+        var target = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("110,280,Auto"),
+            ColumnSpacing = 12,
+            MaxWidth = 740,
+            HorizontalAlignment = HorizontalAlignment.Left
+        };
+        target.Children.Add(new TextBlock
+        {
+            Text = "目标设备",
+            Foreground = MutedBrush,
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        var targetText = new TextBlock
+        {
+            Text = $"{RadioDeviceInfo.DisplayName(RadioDevice.KaDown)}  ·  {_settings.GetIp(RadioDevice.KaDown)}",
+            Foreground = InkBrush,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        Grid.SetColumn(targetText, 1);
+        target.Children.Add(targetText);
+        var actions = new WrapPanel
+        {
+            Orientation = Orientation.Horizontal,
+            ItemSpacing = 8,
+            LineSpacing = 8
+        };
+        actions.Children.Add(ActionButton("选择 CSV", TealBrush, async () => await SelectCalibrationFileAsync()));
+        actions.Children.Add(ActionButton("导出标准模板", GreenBrush, async () => await ExportCalibrationTemplateAsync()));
+        Grid.SetColumn(actions, 2);
+        target.Children.Add(actions);
+        body.Children.Add(target);
+
+        body.Children.Add(new TextBlock
+        {
+            Text = "模板已预填 5 个射频点、3 个中频和 5 档输入功率；请为每行填写同一板卡 UID、Vout、Pout，ATT2 基准可按实测值修改。",
+            Foreground = MutedBrush,
+            FontSize = 12,
+            TextWrapping = TextWrapping.Wrap,
+            MaxWidth = 740
+        });
+
+        _calibrationFileText = new TextBlock
+        {
+            Text = _calibrationFilePath ?? "尚未选择文件",
+            Foreground = MutedBrush,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            MaxWidth = 740
+        };
+        body.Children.Add(_calibrationFileText);
+
+        var preview = new StackPanel { Spacing = 0, MinWidth = 700 };
+        _calibrationPreviewRows = preview;
+        var previewScroll = new ScrollViewer
+        {
+            Content = preview,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+            MaxHeight = 390
+        };
+        body.Children.Add(new Border
+        {
+            Background = Brushes.White,
+            BorderBrush = Brush.Parse("#DDE5E2"),
+            BorderThickness = new Thickness(1),
+            Padding = new Thickness(12),
+            Child = previewScroll
+        });
+
+        _calibrationFeedback = new TextBlock
+        {
+            Text = _calibrationDocument is null ? "等待 CSV 文件" : "预览已就绪",
+            Foreground = MutedBrush,
+            TextWrapping = TextWrapping.Wrap
+        };
+        body.Children.Add(_calibrationFeedback);
+        _calibrationImportButton = ActionButton("校验设备并导入", OrangeBrush,
+            async () => await ImportCalibrationAsync());
+        _calibrationImportButton.IsEnabled = _calibrationDocument is not null;
+        body.Children.Add(_calibrationImportButton);
+        if (_calibrationDocument is not null)
+            RenderCalibrationPreview(_calibrationDocument);
+
+        return new ScrollViewer { Content = body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+    }
+
+    private async Task SelectCalibrationFileAsync()
+    {
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            AllowMultiple = false,
+            FileTypeFilter = new[] { new FilePickerFileType("Ka 校准 CSV") { Patterns = new[] { "*.csv" } } }
+        });
+        if (files.Count == 0)
+            return;
+
+        var path = files[0].TryGetLocalPath();
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            SetCalibrationFeedback("所选文件无法从本机文件系统读取。", false);
+            return;
+        }
+
+        try
+        {
+            var document = CalibrationCsvParser.ParseFile(path);
+            _calibrationDocument = document;
+            _calibrationFilePath = path;
+            if (_calibrationFileText is not null)
+                _calibrationFileText.Text = path;
+            if (_calibrationImportButton is not null)
+                _calibrationImportButton.IsEnabled = true;
+            RenderCalibrationPreview(document);
+            SetCalibrationFeedback($"UID {document.BoardUid} · {document.Points.Count} 个测量点 · CRC {document.Crc32:X8}", true);
+        }
+        catch (Exception ex)
+        {
+            _calibrationDocument = null;
+            _calibrationFilePath = path;
+            if (_calibrationFileText is not null)
+                _calibrationFileText.Text = path;
+            if (_calibrationImportButton is not null)
+                _calibrationImportButton.IsEnabled = false;
+            if (_calibrationPreviewRows is not null)
+                _calibrationPreviewRows.Children.Clear();
+            SetCalibrationFeedback(ex.Message, false);
+        }
+    }
+
+    private async Task ExportCalibrationTemplateAsync()
+    {
+        try
+        {
+            var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+            {
+                SuggestedFileName = "ka-down-calibration-template-v1.csv",
+                DefaultExtension = "csv",
+                FileTypeChoices = new[]
+                {
+                    new FilePickerFileType("Ka 校准 CSV 模板") { Patterns = new[] { "*.csv" } }
+                }
+            });
+            if (file is null)
+                return;
+
+            var path = file.TryGetLocalPath();
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                SetCalibrationFeedback("模板导出失败：目标位置不是本地文件。", false);
+                return;
+            }
+
+            await File.WriteAllTextAsync(path, CalibrationCsvTemplate.Build(), new UTF8Encoding(true));
+            SetCalibrationFeedback($"标准模板已导出：{path}", true);
+            AppendLog($"导出 Ka 下变频校准 CSV 模板：{path}");
+        }
+        catch (Exception ex)
+        {
+            SetCalibrationFeedback($"模板导出失败：{ex.Message}", false);
+        }
+    }
+
+    private void RenderCalibrationPreview(CalibrationDocument document)
+    {
+        if (_calibrationPreviewRows is null)
+            return;
+        var rows = _calibrationPreviewRows;
+        rows.Children.Clear();
+        rows.Children.Add(new TextBlock
+        {
+            Text = "射频 / 中频                 点数   有效拟合点   ATT2 基准    线性模型 Pout = k·Vout + b",
+            FontFamily = "Consolas",
+            FontSize = 12,
+            FontWeight = FontWeight.SemiBold,
+            Foreground = InkBrush,
+            Margin = new Thickness(0, 0, 0, 8)
+        });
+        foreach (var group in document.Groups)
+        {
+            rows.Children.Add(new TextBlock
+            {
+                Text = $"{group.RfMHz / 1000.0:0.000} / {group.IfMHz,4} MHz     {group.PointCount,2}         {group.FitPointCount,2}           {group.Att2BaseQdb / 4.0,5:0.00} dB    {group.SlopeDbmPerMv:0.00000}·V + {group.InterceptDbm:+0.000;-0.000;0.000} dBm",
+                FontFamily = "Consolas",
+                FontSize = 11,
+                Foreground = InkBrush,
+                Margin = new Thickness(0, 2)
+            });
+        }
+        rows.Children.Add(new TextBlock
+        {
+            Text = $"显示板 UID: {document.BoardUid}    测量点: {document.Points.Count}    CRC-32: {document.Crc32:X8}",
+            Foreground = MutedBrush,
+            FontSize = 11,
+            Margin = new Thickness(0, 10, 0, 0)
+        });
+        foreach (var skipped in document.SkippedRows)
+        {
+            rows.Children.Add(new TextBlock
+            {
+                Text = skipped,
+                Foreground = OrangeBrush,
+                FontSize = 11,
+                TextWrapping = TextWrapping.Wrap
+            });
+        }
+    }
+
+    private async Task ImportCalibrationAsync()
+    {
+        if (_calibrationDocument is null)
+            return;
+        if (!IPAddress.TryParse(_settings.GetIp(RadioDevice.KaDown), out _))
+        {
+            SetCalibrationFeedback("Ka 下变频设备 IP 地址无效。", false);
+            return;
+        }
+
+        var host = _settings.GetIp(RadioDevice.KaDown);
+        var document = _calibrationDocument;
+        _calibrationImportRunning = true;
+        if (_calibrationImportButton is not null)
+            _calibrationImportButton.IsEnabled = false;
+        SetCalibrationFeedback("正在暂停目标设备轮询并校验型号、板卡 UID…", true);
+        try
+        {
+            while (_statusPollRunning)
+                await Task.Delay(50);
+
+            await CalibrationTransferClient.ImportAsync(host, document,
+                (target, command, token) => UdpCommandClient.SendAsync(target, command, token),
+                message => SetCalibrationFeedback(message, true));
+            SetCalibrationFeedback("校准表导入完成。设备重启后会从有效槽加载该表。", true);
+            AppendLog($"Ka 下变频校准导入完成：{host} UID={document.BoardUid} CRC={document.Crc32:X8}");
+        }
+        catch (Exception ex)
+        {
+            SetCalibrationFeedback(ex.Message, false);
+            AppendLog($"Ka 下变频校准导入失败：{host} {ex.Message}");
+        }
+        finally
+        {
+            _calibrationImportRunning = false;
+            if (_calibrationImportButton is not null)
+                _calibrationImportButton.IsEnabled = _calibrationDocument is not null;
+        }
+    }
+
+    private void SetCalibrationFeedback(string text, bool success)
+    {
+        if (_calibrationFeedback is null)
+            return;
+        _calibrationFeedback.Text = text;
+        _calibrationFeedback.Foreground = success ? GreenBrush : Brush.Parse("#A84F46");
     }
 
     private Control BuildLogsPage()
@@ -1512,11 +1771,15 @@ public sealed class MainWindow : Window
         _statusPollRunning = true;
         try
         {
-            await Task.WhenAll(
+            var refreshes = new List<Task>
+            {
                 RefreshDeviceAsync(RadioDevice.SUp),
                 RefreshDeviceAsync(RadioDevice.SDown),
-                RefreshDeviceAsync(RadioDevice.KaUp),
-                RefreshDeviceAsync(RadioDevice.KaDown));
+                RefreshDeviceAsync(RadioDevice.KaUp)
+            };
+            if (!_calibrationImportRunning)
+                refreshes.Add(RefreshDeviceAsync(RadioDevice.KaDown));
+            await Task.WhenAll(refreshes);
             UpdateOverviewCards();
         }
         finally

@@ -27,7 +27,7 @@ public sealed class DeviceConfigurationWindow : Window
     private readonly Button _saveButton = new();
     private readonly Button _refreshButton = new();
     private NumericUpDown? _sFrequency;
-    private NumericUpDown? _sAttenuation;
+    private NumericUpDown? _sGain;
     private NumericUpDown? _kaFrequency;
     private NumericUpDown? _kaGain;
     private ComboBox? _reference;
@@ -172,6 +172,7 @@ public sealed class DeviceConfigurationWindow : Window
     {
         var form = new StackPanel { Spacing = 16 };
         var isUp = _device == RadioDevice.SUp;
+        var (gainMin, gainMax) = RadioDeviceInfo.SGainRangeDb(_device);
         _sFrequency = new NumericUpDown
         {
             Minimum = 2000m,
@@ -183,16 +184,18 @@ public sealed class DeviceConfigurationWindow : Window
         };
         form.Children.Add(FormRow("射频频率", WithUnit(_sFrequency, "MHz")));
 
-        _sAttenuation = new NumericUpDown
+        _sGain = new NumericUpDown
         {
-            Minimum = 0,
-            Maximum = isUp ? 31.75m : 63.75m,
-            Increment = isUp ? 0.25m : 0.125m,
+            Minimum = gainMin,
+            Maximum = gainMax,
+            Increment = RadioDeviceInfo.SGainStepDb(_device),
             FormatString = "0.000",
-            Value = (decimal)(_status.AttenuationDb ?? 0),
+            Value = Math.Clamp(_status.AttenuationDb.HasValue
+                ? RadioDeviceInfo.SGainFromAttenuation(_device, _status.AttenuationDb.Value)
+                : gainMax, gainMin, gainMax),
             Width = 220
         };
-        form.Children.Add(FormRow(isUp ? "增益" : "总增益", WithUnit(_sAttenuation, "dB")));
+        form.Children.Add(FormRow(isUp ? "增益" : "总增益", WithUnit(_sGain, "dB")));
 
         _reference = new ComboBox
         {
@@ -210,8 +213,8 @@ public sealed class DeviceConfigurationWindow : Window
 
         form.Children.Add(new TextBlock
         {
-            Text = isUp ? "频率 2000–2400 MHz，步进 1 kHz；增益 0–31.75 dB，步进 0.25 dB。" :
-                "频率 2000–2400 MHz，步进 1 kHz；总增益 0–63.75 dB，步进 0.125 dB。",
+            Text = isUp ? "频率 2000–2400 MHz，步进 1 kHz；增益 5–35 dB，步进 0.25 dB。" :
+                "频率 2000–2400 MHz，步进 1 kHz；总增益 0–40 dB，步进 0.125 dB。",
             Foreground = MutedBrush,
             FontSize = 11,
             TextWrapping = TextWrapping.Wrap
@@ -336,8 +339,13 @@ public sealed class DeviceConfigurationWindow : Window
 
             if (_sFrequency is not null && _status.FrequencyGHz.HasValue)
                 _sFrequency.Value = (decimal)(_status.FrequencyGHz.Value * 1000);
-            if (_sAttenuation is not null && _status.AttenuationDb.HasValue)
-                _sAttenuation.Value = (decimal)_status.AttenuationDb.Value;
+            if (_sGain is not null && _status.AttenuationDb.HasValue)
+            {
+                var (gainMin, gainMax) = RadioDeviceInfo.SGainRangeDb(_device);
+                _sGain.Value = Math.Clamp(
+                    RadioDeviceInfo.SGainFromAttenuation(_device, _status.AttenuationDb.Value),
+                    gainMin, gainMax);
+            }
             if (_kaFrequency is not null && _status.FrequencyGHz.HasValue)
                 _kaFrequency.Value = (decimal)Math.Clamp(_status.FrequencyGHz.Value * 1000.0,
                     (double)KaFrequencyMinMhz, (double)KaFrequencyMaxMhz);
@@ -415,14 +423,21 @@ public sealed class DeviceConfigurationWindow : Window
             return;
         }
         if (!RadioDeviceInfo.IsSDevice(_device) || _sFrequency?.Value is null ||
-            _sAttenuation?.Value is null || _reference is null)
+            _sGain?.Value is null || _reference is null)
             return;
 
+        var frequencyMhz = _sFrequency.Value.Value;
+        var gainDb = _sGain.Value.Value;
+        var (gainMin, gainMax) = RadioDeviceInfo.SGainRangeDb(_device);
+        if (!RadioDeviceInfo.TrySAttenuationFromGain(_device, gainDb, out var attenuationDb))
+        {
+            _feedback.Text = $"增益必须在 {gainMin:0.00}–{gainMax:0.00} dB 范围内，并符合设备步进。";
+            _feedback.Foreground = Brush.Parse("#A84F46");
+            return;
+        }
         SetBusy(true);
         _feedback.Text = "正在下发参数…";
         _feedback.Foreground = MutedBrush;
-        var frequencyMhz = _sFrequency.Value.Value;
-        var attenuationDb = _sAttenuation.Value.Value;
         var external = _reference.SelectedIndex == 1;
         try
         {
